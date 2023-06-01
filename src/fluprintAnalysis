@@ -1,0 +1,123 @@
+import mysql.connector
+from mysql.connector import Error
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+import seaborn as sns
+from pandas.plotting import parallel_coordinates
+from pandas.plotting import scatter_matrix
+
+def create_connection(host_name, user_name, user_password, db_name):
+    connection = None
+    try:
+        connection = mysql.connector.connect(
+            host=host_name,
+            user=user_name,
+            passwd=user_password,
+            database=db_name
+        )
+        print("Connection to MySQL DB successful")
+    except Error as e:
+        print(f"The error '{e}' occurred")
+
+    return connection
+
+# Update these to your own details
+connection = create_connection("127.0.0.1", "root", "kevins", "fluPrint")
+#cursor = connection.cursor()
+study = [15, 17, 18, 21, 24, 28, 29, 30]
+assay = [6, 3, 12, 14, 16, 4, 13, 7, 11]
+cumulative = []
+for i in study:
+    for j in assay:
+        query = "select * from dvm_tbl where assay="+str(j)+" and study_id="+str(i)+" and visit_day=0 order by donor_id, study_id;" #study_id = 18
+        
+        new_columns = ['donor_id','study_id','gender','race','visit_id','geo_mean','d_geo_mean', 'vaccine_resp', 'assay']
+        fluprint_df = pd.read_sql(query, connection)
+        meature_names = fluprint_df['name_formatted'].unique()
+        new_columns.extend(meature_names.tolist())
+
+        new_df = pd.DataFrame(columns = new_columns)   
+
+        curr_donor = 0
+        curr_study_id = 0
+        curr_visit_id = 0
+        count = -1
+        cnt = 0
+        tst_df = pd.DataFrame(columns = meature_names)
+        #testrw = [0.8, 0.03, 32.2, 34.6, 93.1, 0.11, 2.8, 36.8, 12.7, 40.4, 1.65, 8.8, 0.36, 47.2, 1.93, 237.0, 3.96, 11.8, 4.1]
+        testrw = []
+
+        newrow = np.empty(len(new_columns))
+        newrow.fill(np.nan)
+        #selctdonors = []
+        for index, row in fluprint_df.iterrows():
+            if(curr_donor != row['donor_id'] or curr_study_id != row['study_id']) :
+                count = count+1
+                if(len(testrw)==len(meature_names)):
+                    tst_df.loc[len(tst_df.index)] = testrw
+                    testrw = []
+                if pd.isna(row['vaccine_resp']):
+                    testrw.append(float(row['data']))
+                    continue
+                curr_donor = row['donor_id']
+                curr_visit_id = row['visit_id']
+                curr_study_id = row['study_id']
+                new_df.loc[count] = newrow
+                new_df.at[count, 'donor_id']=row['donor_id']
+                new_df.at[count, 'study_id']=row['study_id']
+                new_df.at[count, 'gender']=row['gender']
+                new_df.at[count, 'race']=row['race']
+                new_df.at[count, 'visit_id']=row['visit_id']
+                new_df.at[count, 'geo_mean']=row['geo_mean']
+                new_df.at[count, 'd_geo_mean']=row['d_geo_mean']
+                new_df.at[count, 'vaccine_resp']=int(row['vaccine_resp'])
+                new_df.at[count, 'assay']=row['assay']
+                new_df.at[count, row['name_formatted']]=float(row['data'])
+            elif (curr_visit_id == row['visit_id']):
+                if pd.isna(row['vaccine_resp']):
+                    testrw.append(row['data'])
+                    continue
+                new_df.at[count, row['name_formatted']]=float(row['data'])
+            else :
+                continue
+
+        new_df = new_df.dropna()
+        X = new_df[meature_names.tolist()]
+        y = new_df['vaccine_resp'].astype(int)
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=None)
+        except (ValueError):
+            continue
+        print(i, j)
+        sumAcc = 0
+        count1 = 0
+        acc = []
+        for x in range (25):
+            
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=None)
+
+            try :
+                clf = LogisticRegression(max_iter=1000)
+                clf.fit(X_train,y_train)
+            except (ValueError):
+                continue
+            count1 += 1
+            predicted = clf.predict(X_test)
+            acc.append(accuracy_score(y_test, predicted))
+        if count1 == 0:
+            meanAcc = np.nan
+        else:
+            meanAcc = np.mean(acc)
+            stdAcc = np.std(acc)
+        cumulative.append([i, j, meanAcc, stdAcc])
+
+
+overall_df = pd.DataFrame(cumulative, columns = ['study_id', 'assay', 'meanAcc', 'stdDev'])
+print(overall_df)
+overall_df.to_csv('/Users/lingcheng/Documents/Kevin/SeniorPrj/FluPrint/comparativePredictions2.csv', index=False)
